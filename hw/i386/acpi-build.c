@@ -2804,6 +2804,20 @@ static void acpi_build_update(void *build_opaque)
 
     acpi_ram_update(build_state->table_mr, tables.table_data);
 
+    // dump the table_mr
+    {
+        uint8_t *ptr = memory_region_get_ram_ptr(build_state->table_mr);
+        uint64_t size = memory_region_size(build_state->table_mr);
+        printf("TableData1:");
+        for (uint32_t i = 0; i < size; i++) {
+            printf("%02x", ptr[i]);
+        }
+        printf("\n");
+        printf("End\n");
+        fflush(stdout);
+        exit(0);
+    }
+
     if (build_state->rsdp) {
         memcpy(build_state->rsdp, tables.rsdp->data, acpi_data_len(tables.rsdp));
     } else {
