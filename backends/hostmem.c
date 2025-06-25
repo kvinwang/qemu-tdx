@@ -408,6 +408,9 @@ host_memory_backend_memory_complete(UserCreatable *uc, Error **errp)
     }
 #endif
 
+#ifdef DUMP_ACPI_TABLES
+    (void)flags;
+#else
     if (maxnode &&
         mbind(ptr, sz, mode, backend->host_nodes, maxnode + 1, flags)) {
         if (backend->policy != MPOL_DEFAULT || errno != ENOSYS) {
@@ -416,6 +419,7 @@ host_memory_backend_memory_complete(UserCreatable *uc, Error **errp)
             return;
         }
     }
+#endif
 #endif
     /*
      * Preallocate memory after the NUMA policy has been instantiated.

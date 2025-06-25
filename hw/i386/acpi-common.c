@@ -113,7 +113,11 @@ void acpi_build_madt(GArray *table_data, BIOSLinker *linker,
                               x86ms->pic != ON_OFF_AUTO_OFF ? 1 : 0 , 4);
 
     for (i = 0; i < apic_ids->len; i++) {
+#ifdef DUMP_ACPI_TABLES
+        pc_madt_cpu_entry(i, apic_ids, table_data, true);
+#else
         pc_madt_cpu_entry(i, apic_ids, table_data, false);
+#endif
         if (apic_ids->cpus[i].arch_id > 254) {
             x2apic_mode = true;
         }

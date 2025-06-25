@@ -1851,9 +1851,15 @@ static void ram_block_add(RAMBlock *new_block, Error **errp)
                 return;
             }
         } else {
+#ifdef DUMP_ACPI_TABLES
+            new_block->host = qemu_anon_ram_alloc(MIN(new_block->max_length, 20971520),
+                                                  &new_block->mr->align,
+                                                  shared, noreserve);
+#else
             new_block->host = qemu_anon_ram_alloc(new_block->max_length,
                                                   &new_block->mr->align,
                                                   shared, noreserve);
+#endif
             if (!new_block->host) {
                 error_setg_errno(errp, errno,
                                  "cannot set up guest memory '%s'",
@@ -1866,10 +1872,9 @@ static void ram_block_add(RAMBlock *new_block, Error **errp)
         }
     }
 
-    if (new_block->flags & RAM_GUEST_MEMFD) {
+    if (kvm_enabled() && new_block->flags & RAM_GUEST_MEMFD) {
         int ret;
 
-        assert(kvm_enabled());
         assert(new_block->guest_memfd < 0);
 
         ret = ram_block_coordinated_discard_require(true);
@@ -2026,6 +2031,9 @@ RAMBlock *qemu_ram_alloc_from_file(ram_addr_t size, MemoryRegion *mr,
     bool created;
     RAMBlock *block;
 
+#ifdef DUMP_ACPI_TABLES
+    return qemu_ram_alloc(size, RAM_GUEST_MEMFD, mr, errp);
+#endif
     fd = file_ram_open(mem_path, memory_region_name(mr),
                        !!(ram_flags & RAM_READONLY_FD), &created);
     if (fd < 0) {
