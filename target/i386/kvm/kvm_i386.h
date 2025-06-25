@@ -12,6 +12,14 @@
 #define QEMU_KVM_I386_H
 
 #include "sysemu/kvm.h"
+#include <linux/kvm.h>
+
+#define KVM_MAX_CPUID_ENTRIES  100
+
+typedef struct KvmCpuidInfo {
+    struct kvm_cpuid2 cpuid;
+    struct kvm_cpuid_entry2 entries[KVM_MAX_CPUID_ENTRIES];
+} KvmCpuidInfo;
 
 #ifdef CONFIG_KVM
 
@@ -21,6 +29,9 @@
     (kvm_irqchip_in_kernel() && !kvm_irqchip_is_split())
 #define kvm_ioapic_in_kernel() \
     (kvm_irqchip_in_kernel() && !kvm_irqchip_is_split())
+
+uint32_t kvm_x86_build_cpuid(CPUX86State *env, struct kvm_cpuid_entry2 *entries,
+                             uint32_t cpuid_i);
 
 #else
 
@@ -65,6 +76,10 @@ bool kvm_has_waitpkg(void);
 uint64_t kvm_swizzle_msi_ext_dest_id(uint64_t address);
 void kvm_update_msi_routes_all(void *private, bool global,
                                uint32_t index, uint32_t mask);
+uint32_t cpuid_entry_get_reg(struct kvm_cpuid_entry2 *entry, int reg);
+struct kvm_cpuid_entry2 *cpuid_find_entry(struct kvm_cpuid2 *cpuid,
+                                          uint32_t function,
+                                          uint32_t index);
 
 #endif /* CONFIG_KVM */
 
