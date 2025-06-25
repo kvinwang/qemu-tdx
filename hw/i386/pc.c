@@ -869,11 +869,14 @@ void pc_memory_init(PCMachineState *pcms,
      */
     maxusedaddr = pc_max_used_gpa(pcms, pci_hole64_size);
     maxphysaddr = ((hwaddr)1 << cpu->phys_bits) - 1;
+
     if (maxphysaddr < maxusedaddr) {
+#ifndef DUMP_ACPI_TABLES
         error_report("Address space limit 0x%"PRIx64" < 0x%"PRIx64
                      " phys-bits too low (%u)",
                      maxphysaddr, maxusedaddr, cpu->phys_bits);
         exit(EXIT_FAILURE);
+#endif
     }
 
     /*

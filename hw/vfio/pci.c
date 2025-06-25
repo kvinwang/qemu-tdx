@@ -2967,6 +2967,9 @@ static void vfio_realize(PCIDevice *pdev, Error **errp)
     char uuid[UUID_STR_LEN];
     g_autofree char *name = NULL;
 
+#ifdef DUMP_ACPI_TABLES
+    return;
+#endif
     if (vbasedev->fd < 0 && !vbasedev->sysfsdev) {
         if (!(~vdev->host.domain || ~vdev->host.bus ||
               ~vdev->host.slot || ~vdev->host.function)) {

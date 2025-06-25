@@ -142,7 +142,11 @@ static void init_common_fadt_data(MachineState *ms, Object *o,
      */
     bool smm_enabled = object_property_get_bool(o, "smm-compat", NULL) ?
         true : x86_machine_is_smm_enabled(x86ms);
+#ifdef DUMP_ACPI_TABLES
+    uint32_t io = 0x600;
+#else
     uint32_t io = object_property_get_uint(o, ACPI_PM_PROP_PM_IO_BASE, NULL);
+#endif
     AmlAddressSpace as = AML_AS_SYSTEM_IO;
     AcpiFadtData fadt = {
         .rev = 3,
@@ -163,7 +167,11 @@ static void init_common_fadt_data(MachineState *ms, Object *o,
         .plvl2_lat = 0xfff /* C2 state not supported */,
         .plvl3_lat = 0xfff /* C3 state not supported */,
         .smi_cmd = smm_enabled ? ACPI_PORT_SMI_CMD : 0,
+#ifdef DUMP_ACPI_TABLES
+        .sci_int = 9,
+#else
         .sci_int = object_property_get_uint(o, ACPI_PM_PROP_SCI_INT, NULL),
+#endif
         .acpi_enable_cmd =
             smm_enabled ?
             object_property_get_uint(o, ACPI_PM_PROP_ACPI_ENABLE_CMD, NULL) :
@@ -178,7 +186,11 @@ static void init_common_fadt_data(MachineState *ms, Object *o,
         .pm_tmr = { .space_id = as, .bit_width = 4 * 8, .address = io + 0x08 },
         .gpe0_blk = { .space_id = as, .bit_width =
             object_property_get_uint(o, ACPI_PM_PROP_GPE0_BLK_LEN, NULL) * 8,
+#ifdef DUMP_ACPI_TABLES
+            .address = io + 0x20
+#else
             .address = object_property_get_uint(o, ACPI_PM_PROP_GPE0_BLK, NULL)
+#endif
         },
     };
 
@@ -293,6 +305,18 @@ static void acpi_get_pci_holes(Range *hole, Range *hole64)
     if (!pci_host) {
         return;
     }
+
+#ifdef DUMP_ACPI_TABLES
+    {
+        X86MachineState *x86ms = X86_MACHINE(qdev_get_machine());
+        uint64_t hole64_size = object_property_get_uint(pci_host,
+                                               PCI_HOST_PROP_PCI_HOLE64_SIZE,
+                                               NULL);
+        range_set_bounds1(hole, x86ms->below_4g_mem_size, 0xfec00000);
+        range_set_bounds1(hole64, 0x380000000000ULL, 0x380000000000ULL + hole64_size);
+        return;
+    }
+#endif
 
     range_set_bounds1(hole,
                       object_property_get_uint(pci_host,
@@ -646,6 +670,11 @@ static bool build_append_notfication_callback(Aml *parent_scope,
     return !!nr_notifiers;
 }
 
+static inline AmlLevelAndEdge acpi_dump_irq_trigger(void)
+{
+    return acpi_dump_compat_9_1() ? AML_EDGE : AML_LEVEL;
+}
+
 static Aml *aml_pci_pdsm(void)
 {
     Aml *method, *ifctx, *ifctx1;
@@ -705,31 +734,38 @@ static Aml *aml_pci_pdsm(void)
     {
        Aml *pkg = aml_package(2);
 
-       aml_append(ifctx, aml_store(aml_call2("AIDX", bnum, sunum), acpi_index));
-       aml_append(ifctx, aml_store(pkg, ret));
-       /*
-        * Windows calls func=7 without checking if it's available,
-        * as workaround Microsoft has suggested to return invalid for func7
-        * Package, so return 2 elements package but only initialize elements
-        * when acpi_index is supported and leave them uninitialized, which
-        * leads elements to being Uninitialized ObjectType and should trip
-        * Windows into discarding result as an unexpected and prevent setting
-        * bogus 'PCI Label' on the device.
-        */
-       ifctx1 = aml_if(aml_lnot(aml_lor(
-                    aml_equal(acpi_index, zero), aml_equal(acpi_index, not_supp)
-                )));
-       {
-           aml_append(ifctx1, aml_store(acpi_index, aml_index(ret, zero)));
-           /*
-            * optional, if not impl. should return null string
-            */
-           aml_append(ifctx1, aml_store(aml_string("%s", ""),
-                                        aml_index(ret, one)));
-       }
-       aml_append(ifctx, ifctx1);
+       if (acpi_dump_compat_9_1()) {
+           aml_append(pkg, zero);
+           aml_append(pkg, aml_string("%s", ""));
+           aml_append(ifctx, aml_store(pkg, ret));
 
-       aml_append(ifctx, aml_return(ret));
+           aml_append(ifctx, aml_store(aml_call2("AIDX", bnum, sunum),
+                                       acpi_index));
+           aml_append(ifctx, aml_store(acpi_index, aml_index(ret, zero)));
+           aml_append(ifctx, aml_return(ret));
+       } else {
+           aml_append(ifctx, aml_store(aml_call2("AIDX", bnum, sunum),
+                                       acpi_index));
+           aml_append(ifctx, aml_store(pkg, ret));
+           /*
+            * Windows calls func=7 without checking if it's available.
+            * Return a partially initialised package when acpi_index is
+            * supported to nudge Windows into discarding the result.
+            */
+           ifctx1 = aml_if(aml_lnot(aml_lor(
+                        aml_equal(acpi_index, zero),
+                        aml_equal(acpi_index, not_supp)
+                    )));
+           {
+               aml_append(ifctx1, aml_store(acpi_index, aml_index(ret, zero)));
+               /* Optional, if not implemented should return null string */
+               aml_append(ifctx1, aml_store(aml_string("%s", ""),
+                                            aml_index(ret, one)));
+           }
+           aml_append(ifctx, ifctx1);
+
+           aml_append(ifctx, aml_return(ret));
+       }
     }
 
     aml_append(method, ifctx);
@@ -913,7 +949,7 @@ static Aml *build_link_dev(const char *name, uint8_t uid, Aml *reg)
     aml_append(dev, aml_name_decl("_UID", aml_int(uid)));
 
     crs = aml_resource_template();
-    aml_append(crs, aml_interrupt(AML_CONSUMER, AML_LEVEL, AML_ACTIVE_HIGH,
+    aml_append(crs, aml_interrupt(AML_CONSUMER, acpi_dump_irq_trigger(), AML_ACTIVE_HIGH,
                                   AML_SHARED, irqs, ARRAY_SIZE(irqs)));
     aml_append(dev, aml_name_decl("_PRS", crs));
 
@@ -950,7 +986,7 @@ static Aml *build_gsi_link_dev(const char *name, uint8_t uid, uint8_t gsi)
 
     crs = aml_resource_template();
     irqs = gsi;
-    aml_append(crs, aml_interrupt(AML_CONSUMER, AML_LEVEL, AML_ACTIVE_HIGH,
+    aml_append(crs, aml_interrupt(AML_CONSUMER, acpi_dump_irq_trigger(), AML_ACTIVE_HIGH,
                                   AML_SHARED, &irqs, 1));
     aml_append(dev, aml_name_decl("_PRS", crs));
 
@@ -977,7 +1013,7 @@ static Aml *build_iqcr_method(bool is_piix4)
     Aml *crs = aml_resource_template();
 
     irqs = 0;
-    aml_append(crs, aml_interrupt(AML_CONSUMER, AML_LEVEL,
+    aml_append(crs, aml_interrupt(AML_CONSUMER, acpi_dump_irq_trigger(),
                                   AML_ACTIVE_HIGH, AML_SHARED, &irqs, 1));
     aml_append(method, aml_name_decl("PRR0", crs));
 
@@ -1038,7 +1074,7 @@ static void build_piix4_pci0_int(Aml *table)
 
         crs = aml_resource_template();
         irqs = 9;
-        aml_append(crs, aml_interrupt(AML_CONSUMER, AML_LEVEL,
+        aml_append(crs, aml_interrupt(AML_CONSUMER, acpi_dump_irq_trigger(),
                                       AML_ACTIVE_HIGH, AML_SHARED,
                                       &irqs, 1));
         aml_append(dev, aml_name_decl("_PRS", crs));
@@ -2408,6 +2444,14 @@ static bool acpi_get_mcfg(AcpiMcfgInfo *mcfg)
     Object *pci_host;
     QObject *o;
 
+#ifdef DUMP_ACPI_TABLES
+    {
+        mcfg->base = 0xe0000000;
+        mcfg->size = 0x10000000;
+        return true;
+    }
+#endif
+
     pci_host = acpi_get_i386_pci_host();
     if (!pci_host) {
         return false;
@@ -2676,6 +2720,21 @@ static const VMStateDescription vmstate_acpi_build = {
     },
 };
 
+#ifdef DUMP_ACPI_TABLES
+static void tdx_init(void)
+{
+    MachineState *ms = MACHINE(qdev_get_machine());
+    X86MachineState *x86ms = X86_MACHINE(ms);
+    // ms->require_guest_memfd = true;
+    if (x86ms->smm == ON_OFF_AUTO_AUTO) {
+        x86ms->smm = ON_OFF_AUTO_OFF;
+    }
+    if (x86ms->pic == ON_OFF_AUTO_AUTO) {
+        x86ms->pic = ON_OFF_AUTO_OFF;
+    }
+}
+#endif
+
 void acpi_setup(void)
 {
     PCMachineState *pcms = PC_MACHINE(qdev_get_machine());
@@ -2686,6 +2745,10 @@ void acpi_setup(void)
 #ifdef CONFIG_TPM
     TPMIf *tpm;
     static FwCfgTPMConfig tpm_config;
+#endif
+
+#ifdef DUMP_ACPI_TABLES
+    tdx_init();
 #endif
 
     if (!x86ms->fw_cfg) {
@@ -2708,6 +2771,32 @@ void acpi_setup(void)
     acpi_build_tables_init(&tables);
     acpi_build(&tables, MACHINE(pcms));
 
+#ifdef DUMP_ACPI_TABLES
+    {
+        uint8_t *ptr = (uint8_t *)tables.table_data->data;
+        uint64_t size = tables.table_data->len;
+        int flags = fcntl(1, F_GETFL);
+        if (flags < 0) {
+            perror("fcntl");
+            exit(1);
+        }
+        if (fcntl(1, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+            perror("fcntl");
+            exit(1);
+        }
+
+        while (size > 0) {
+            int ret = write(1, ptr, size);
+            if (ret < 0) {
+                fprintf(stderr, "Failed to write ACPI table, ret=%d\n", ret);
+                exit(1);
+            }
+            ptr += ret;
+            size -= ret;
+        }
+        exit(0);
+    }
+#endif
     /* Now expose it all to Guest */
     build_state->table_mr = acpi_add_rom_blob(acpi_build_update,
                                               build_state, tables.table_data,

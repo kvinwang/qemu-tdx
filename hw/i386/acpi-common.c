@@ -112,7 +112,11 @@ void acpi_build_madt(GArray *table_data, BIOSLinker *linker,
                               x86ms->pic != ON_OFF_AUTO_OFF ? 1 : 0 , 4);
 
     for (i = 0; i < apic_ids->len; i++) {
+#ifdef DUMP_ACPI_TABLES
+        pc_madt_cpu_entry(i, apic_ids, table_data, true);
+#else
         pc_madt_cpu_entry(i, apic_ids, table_data, false);
+#endif
         if (apic_ids->cpus[i].arch_id > 254) {
             x2apic_mode = true;
         }
@@ -124,18 +128,39 @@ void acpi_build_madt(GArray *table_data, BIOSLinker *linker,
                      IO_APIC_SECONDARY_ADDRESS, IO_APIC_SECONDARY_IRQBASE);
     }
 
-    if (x86mc->apic_xrupt_override) {
-        build_xrupt_override(table_data, 0, 2,
-            0 /* Flags: Conforms to the specifications of the bus */);
-    }
-
-    for (i = 1; i < 16; i++) {
-        if (!(x86ms->pci_irq_mask & (1 << i))) {
-            /* No need for a INT source override structure. */
-            continue;
+    if (acpi_dump_compat_9_1()) {
+        if (x86mc->apic_xrupt_override) {
+            build_xrupt_override(table_data, 0, 2,
+                                 0x5 /* Flags: Active high, Edge Triggered */);
         }
-        build_xrupt_override(table_data, i, i,
-            0xd /* Flags: Active high, Level Triggered */);
+
+        for (i = x86mc->apic_xrupt_override ? 1 : 0; i < 16; i++) {
+            build_xrupt_override(table_data, i, i,
+                                 0x5 /* Flags: Active high, Edge Triggered */);
+        }
+
+        if (x86ms->ioapic2) {
+            for (i = 0; i < 16; i++) {
+                build_xrupt_override(table_data,
+                                     IO_APIC_SECONDARY_IRQBASE + i,
+                                     IO_APIC_SECONDARY_IRQBASE + i,
+                                     0x5 /* Flags: Active high, Edge Triggered */);
+            }
+        }
+    } else {
+        if (x86mc->apic_xrupt_override) {
+            build_xrupt_override(table_data, 0, 2,
+                0 /* Flags: Conforms to the specifications of the bus */);
+        }
+
+        for (i = 1; i < 16; i++) {
+            if (!(x86ms->pci_irq_mask & (1 << i))) {
+                /* No need for a INT source override structure. */
+                continue;
+            }
+            build_xrupt_override(table_data, i, i,
+                0xd /* Flags: Active high, Level Triggered */);
+        }
     }
 
     if (x2apic_mode) {
@@ -162,4 +187,3 @@ void acpi_build_madt(GArray *table_data, BIOSLinker *linker,
 
     acpi_table_end(linker, &table);
 }
-

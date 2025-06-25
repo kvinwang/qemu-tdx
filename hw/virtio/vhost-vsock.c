@@ -152,7 +152,11 @@ static void vhost_vsock_device_realize(DeviceState *dev, Error **errp)
             return;
         }
     } else {
+#ifdef DUMP_ACPI_TABLES
+        vhostfd = open("/dev/zero", O_RDWR);
+#else
         vhostfd = open("/dev/vhost-vsock", O_RDWR);
+#endif
         if (vhostfd < 0) {
             error_setg_errno(errp, errno,
                              "vhost-vsock: failed to open vhost device");
@@ -167,6 +171,10 @@ static void vhost_vsock_device_realize(DeviceState *dev, Error **errp)
     }
 
     vhost_vsock_common_realize(vdev);
+
+#ifdef DUMP_ACPI_TABLES
+    return;
+#endif
 
     ret = vhost_dev_init(&vvc->vhost_dev, (void *)(uintptr_t)vhostfd,
                          VHOST_BACKEND_TYPE_KERNEL, 0, errp);
