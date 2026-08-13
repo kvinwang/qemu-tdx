@@ -28,6 +28,7 @@
 #include "qemu/module.h"
 #include "sysemu/sysemu.h"
 #include "hw/acpi/acpi_aml_interface.h"
+#include "hw/acpi/acpi-compat.h"
 #include "hw/char/serial.h"
 #include "hw/char/serial-isa.h"
 #include "hw/isa/isa.h"
@@ -92,8 +93,12 @@ static void serial_isa_build_aml(AcpiDevAmlIf *adev, Aml *scope)
 
     crs = aml_resource_template();
     aml_append(crs, aml_io(AML_DECODE16, isa->iobase, isa->iobase, 0x00, 0x08));
-    aml_append(crs, aml_irq(isa->isairq, AML_LEVEL, AML_ACTIVE_LOW,
-                            AML_SHARED));
+    if (acpi_dump_compat_before(11, 1, 0)) {
+        aml_append(crs, aml_irq_no_flags(isa->isairq));
+    } else {
+        aml_append(crs, aml_irq(isa->isairq, AML_LEVEL, AML_ACTIVE_LOW,
+                                AML_SHARED));
+    }
 
     dev = aml_device("COM%d", isa->index + 1);
     aml_append(dev, aml_name_decl("_HID", aml_eisaid("PNP0501")));

@@ -31,6 +31,7 @@
 
 #include "acpi-build.h"
 #include "acpi-common.h"
+#include "hw/acpi/acpi-compat.h"
 
 void pc_madt_cpu_entry(int uid, const CPUArchIdList *apic_ids,
                        GArray *entry, bool force_enabled)

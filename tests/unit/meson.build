@@ -127,7 +127,7 @@ endif
 
 if have_system
   tests += {
-    'test-acpi-compat': [meson.project_source_root() / 'hw/i386/acpi-compat.c'],
+    'test-acpi-compat': [meson.project_source_root() / 'hw/acpi/acpi-compat.c'],
     'ptimer-test': ['ptimer-test-stubs.c', meson.project_source_root() / 'hw/core/ptimer.c'],
     'test-iov': [],
     'test-opts-visitor': [testqapi],

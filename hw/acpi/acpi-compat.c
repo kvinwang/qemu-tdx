@@ -1,9 +1,11 @@
 #include "qemu/osdep.h"
 #include <limits.h>
 
-#include "hw/i386/acpi-common.h"
+#include "hw/acpi/acpi-compat.h"
 
 static int compat_cached = -1;
+static long compat_version[3];
+static bool compat_version_valid;
 
 static bool parse_version_tuple(const char *env, long ver[3])
 {
@@ -42,6 +44,8 @@ bool acpi_dump_compat_9_1(void)
             long ver[3];
 
             if (parse_version_tuple(env, ver)) {
+                memcpy(compat_version, ver, sizeof(compat_version));
+                compat_version_valid = true;
                 const int cutoff[3] = { 9, 2, 0 };
 
                 if (ver[0] < cutoff[0] ||
@@ -57,7 +61,21 @@ bool acpi_dump_compat_9_1(void)
     return compat_cached;
 }
 
+bool acpi_dump_compat_before(unsigned major, unsigned minor, unsigned micro)
+{
+    /* Populate the shared parsed-version cache. */
+    acpi_dump_compat_9_1();
+    if (!compat_version_valid) {
+        return false;
+    }
+    return compat_version[0] < major ||
+           (compat_version[0] == major && compat_version[1] < minor) ||
+           (compat_version[0] == major && compat_version[1] == minor &&
+            compat_version[2] < micro);
+}
+
 void acpi_dump_compat_reset(void)
 {
     compat_cached = -1;
+    compat_version_valid = false;
 }
