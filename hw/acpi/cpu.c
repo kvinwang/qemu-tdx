@@ -1,6 +1,7 @@
 #include "qemu/osdep.h"
 #include "migration/vmstate.h"
 #include "hw/acpi/cpu.h"
+#include "hw/i386/acpi-common.h"
 #include "hw/core/cpu.h"
 #include "qapi/error.h"
 #include "qapi/qapi-events-acpi.h"
@@ -408,6 +409,12 @@ void build_cpus_aml(Aml *table, MachineState *machine, CPUHotplugFeatures opts,
         aml_append(field, aml_reserved_field(4 * 8));
         aml_append(field, aml_named_field(CPU_DATA, 32));
         aml_append(cpu_ctrl_dev, field);
+
+        if (opts.has_legacy_cphp && acpi_dump_compat_before(11, 0, 0)) {
+            method = aml_method("_INI", 0, AML_SERIALIZED);
+            aml_append(method, aml_store(zero, aml_name(CPU_SELECTOR)));
+            aml_append(cpu_ctrl_dev, method);
+        }
     }
     aml_append(sb_scope, cpu_ctrl_dev);
 
@@ -479,7 +486,8 @@ void build_cpus_aml(Aml *table, MachineState *machine, CPUHotplugFeatures opts,
         method = aml_method(CPU_SCAN_METHOD, 0, AML_SERIALIZED);
         {
             const uint8_t max_cpus_per_pass = 255;
-            Aml *while_ctx, *while_ctx2;
+            Aml *while_ctx, *while_ctx2, *else_ctx;
+            bool compat_before_10 = acpi_dump_compat_before(10, 0, 0);
             Aml *has_event = aml_local(0);
             Aml *dev_chk = aml_int(1);
             Aml *eject_req = aml_int(3);
@@ -505,8 +513,10 @@ void build_cpus_aml(Aml *table, MachineState *machine, CPUHotplugFeatures opts,
              */
             aml_append(method, aml_name_decl(CPU_ADDED_LIST,
                                              aml_package(max_cpus_per_pass)));
-            aml_append(method, aml_name_decl(CPU_EJ_LIST,
-                                             aml_package(max_cpus_per_pass)));
+            if (!compat_before_10) {
+                aml_append(method, aml_name_decl(CPU_EJ_LIST,
+                                                 aml_package(max_cpus_per_pass)));
+            }
 
             aml_append(method, aml_store(zero, uid));
             aml_append(method, aml_store(one, has_job));
@@ -521,7 +531,9 @@ void build_cpus_aml(Aml *table, MachineState *machine, CPUHotplugFeatures opts,
 
                 aml_append(while_ctx2, aml_store(one, has_event));
                 aml_append(while_ctx2, aml_store(zero, num_added_cpus));
-                aml_append(while_ctx2, aml_store(zero, num_ej_cpus));
+                if (!compat_before_10) {
+                    aml_append(while_ctx2, aml_store(zero, num_ej_cpus));
+                }
 
                 /*
                  * Scan CPUs, till there are CPUs with events or
@@ -554,10 +566,14 @@ void build_cpus_aml(Aml *table, MachineState *machine, CPUHotplugFeatures opts,
                       * if CPU_ADDED_LIST is full, exit inner loop and process
                       * collected CPUs
                       */
-                     ifctx = aml_if(aml_lor(
-                         aml_equal(num_added_cpus, aml_int(max_cpus_per_pass)),
-                         aml_equal(num_ej_cpus, aml_int(max_cpus_per_pass))
-                         ));
+                     ifctx = compat_before_10 ?
+                         aml_if(aml_equal(num_added_cpus,
+                                          aml_int(max_cpus_per_pass))) :
+                         aml_if(aml_lor(
+                             aml_equal(num_added_cpus,
+                                       aml_int(max_cpus_per_pass)),
+                             aml_equal(num_ej_cpus,
+                                       aml_int(max_cpus_per_pass))));
                      {
                          aml_append(ifctx, aml_store(one, has_job));
                          aml_append(ifctx, aml_break());
@@ -576,14 +592,21 @@ void build_cpus_aml(Aml *table, MachineState *machine, CPUHotplugFeatures opts,
                      aml_append(while_ctx, ifctx);
 
                      ifctx = aml_if(aml_equal(rm_evt, one));
-                     {
-                         /* cache to be removed CPUs to Notify later */
+                     if (compat_before_10) {
+                         aml_append(ifctx,
+                             aml_call2(CPU_NOTIFY_METHOD, uid, eject_req));
+                         aml_append(ifctx, aml_store(one, rm_evt));
+                         aml_append(ifctx, aml_store(one, has_event));
+                         else_ctx = aml_else();
+                         aml_append(else_ctx, ifctx);
+                         aml_append(while_ctx, else_ctx);
+                     } else {
                          aml_append(ifctx, aml_store(uid,
                              aml_index(ej_cpus, num_ej_cpus)));
                          aml_append(ifctx, aml_increment(num_ej_cpus));
                          aml_append(ifctx, aml_store(one, has_event));
+                         aml_append(while_ctx, ifctx);
                      }
-                     aml_append(while_ctx, ifctx);
                      aml_append(while_ctx, aml_increment(uid));
                 }
                 aml_append(while_ctx2, while_ctx);
@@ -621,19 +644,21 @@ void build_cpus_aml(Aml *table, MachineState *machine, CPUHotplugFeatures opts,
                 /*
                  * Notify OSPM about to be removed CPUs and clear remove flag
                  */
-                aml_append(while_ctx2, aml_store(zero, cpu_idx));
-                while_ctx = aml_while(aml_lless(cpu_idx, num_ej_cpus));
-                {
-                    aml_append(while_ctx,
-                        aml_store(aml_derefof(aml_index(ej_cpus, cpu_idx)),
-                                  uid));
-                    aml_append(while_ctx,
-                        aml_call2(CPU_NOTIFY_METHOD, uid, eject_req));
-                    aml_append(while_ctx, aml_store(uid, cpu_selector));
-                    aml_append(while_ctx, aml_store(one, rm_evt));
-                    aml_append(while_ctx, aml_increment(cpu_idx));
+                if (!compat_before_10) {
+                    aml_append(while_ctx2, aml_store(zero, cpu_idx));
+                    while_ctx = aml_while(aml_lless(cpu_idx, num_ej_cpus));
+                    {
+                        aml_append(while_ctx,
+                            aml_store(aml_derefof(aml_index(ej_cpus, cpu_idx)),
+                                      uid));
+                        aml_append(while_ctx,
+                            aml_call2(CPU_NOTIFY_METHOD, uid, eject_req));
+                        aml_append(while_ctx, aml_store(uid, cpu_selector));
+                        aml_append(while_ctx, aml_store(one, rm_evt));
+                        aml_append(while_ctx, aml_increment(cpu_idx));
+                    }
+                    aml_append(while_ctx2, while_ctx);
                 }
-                aml_append(while_ctx2, while_ctx);
 
                 /*
                  * If another batch is needed, then it will resume scanning

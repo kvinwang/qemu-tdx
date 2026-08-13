@@ -14,6 +14,7 @@ void acpi_build_madt(GArray *table_data, BIOSLinker *linker,
                      X86MachineState *x86ms,
                      const char *oem_id, const char *oem_table_id);
 bool acpi_dump_compat_9_1(void);
+bool acpi_dump_compat_before(unsigned major, unsigned minor, unsigned micro);
 void acpi_dump_compat_reset(void);
 
 #endif

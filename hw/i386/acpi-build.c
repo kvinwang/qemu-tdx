@@ -1505,6 +1505,7 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
     } else {
         CPUHotplugFeatures opts = {
             .acpi_1_compatible = true,
+            .has_legacy_cphp = true,
             .smi_path = pm->smi_on_cpuhp ? "\\_SB.PCI0.SMI0.SMIC" : NULL,
             .fw_unplugs_cpu = pm->smi_on_cpu_unplug,
         };
