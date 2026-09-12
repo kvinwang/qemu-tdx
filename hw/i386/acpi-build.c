@@ -2737,6 +2737,70 @@ static void tdx_init(void)
 }
 #endif
 
+#ifdef DUMP_ACPI_TABLES
+/*
+ * Write the measured ACPI blobs and leave without running a guest.
+ *
+ * With QEMU_ACPI_DUMP_DIR set, all three blobs the firmware consumes are
+ * written there as tables.bin, loader.bin and rsdp.bin. Otherwise the
+ * 128 KiB etc/acpi/tables blob goes to stdout.
+ */
+static void acpi_dump_tables_and_exit(AcpiBuildTables *tables)
+{
+    const char *dump_dir = getenv("QEMU_ACPI_DUMP_DIR");
+    uint8_t *ptr;
+    uint64_t size;
+    int flags;
+
+    if (dump_dir) {
+        struct {
+            const char *name;
+            GArray *blob;
+        } outputs[] = {
+            { "tables.bin", tables->table_data },
+            { "loader.bin", tables->linker->cmd_blob },
+            { "rsdp.bin", tables->rsdp },
+        };
+
+        for (size_t i = 0; i < ARRAY_SIZE(outputs); i++) {
+            g_autofree char *path = g_build_filename(dump_dir,
+                                                     outputs[i].name, NULL);
+            g_autoptr(GError) error = NULL;
+
+            if (!g_file_set_contents(path, outputs[i].blob->data,
+                                     outputs[i].blob->len, &error)) {
+                error_report("failed to dump %s: %s", path, error->message);
+                exit(1);
+            }
+        }
+        exit(0);
+    }
+
+    ptr = (uint8_t *)tables->table_data->data;
+    size = tables->table_data->len;
+    flags = fcntl(1, F_GETFL);
+    if (flags < 0) {
+        perror("fcntl");
+        exit(1);
+    }
+    if (fcntl(1, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+        perror("fcntl");
+        exit(1);
+    }
+
+    while (size > 0) {
+        int ret = write(1, ptr, size);
+        if (ret < 0) {
+            fprintf(stderr, "Failed to write ACPI table, ret=%d\n", ret);
+            exit(1);
+        }
+        ptr += ret;
+        size -= ret;
+    }
+    exit(0);
+}
+#endif
+
 void acpi_setup(void)
 {
     PCMachineState *pcms = PC_MACHINE(qdev_get_machine());
@@ -2775,28 +2839,36 @@ void acpi_setup(void)
 
 #ifdef DUMP_ACPI_TABLES
     {
-        uint8_t *ptr = (uint8_t *)tables.table_data->data;
-        uint64_t size = tables.table_data->len;
-        int flags = fcntl(1, F_GETFL);
-        if (flags < 0) {
-            perror("fcntl");
-            exit(1);
-        }
-        if (fcntl(1, F_SETFL, flags & ~O_NONBLOCK) < 0) {
-            perror("fcntl");
-            exit(1);
-        }
+        /*
+         * Dump the tables the guest actually reads, which are not the ones
+         * built just above.
+         *
+         * A PCI bridge secondary bus only gains its ACPI hotplug BSEL property
+         * in acpi_set_pci_info(), reached from the ICH9 PM reset handler via
+         * acpi_pcihp_reset(). Machine reset runs after this machine_init_done
+         * notifier, and QEMU then rebuilds the tables through
+         * acpi_build_update(), so the blob the guest measures is the rebuilt
+         * one. Dumping `tables` here would emit a DSDT built before any BSEL
+         * existed, missing every root-port hotplug term (BSEL, _DSM, _SUN,
+         * _EJ0, DVNT and the recursive PCNT methods).
+         *
+         * QEMU's own ACPI tests read the tables back out of guest memory once
+         * the machine is up, for the same reason; see
+         * tests/qtest/bios-tables-test.c. This dump cannot do that: it must
+         * exit before any device is reset, because the harness stands in for
+         * passed-through GPUs with vfio-pci devices that survive realize but
+         * not reset. So assign the BSEL properties explicitly -- the only
+         * reset side effect that changes the generated AML -- and rebuild.
+         */
+        AcpiPmInfo dump_pm;
+        AcpiBuildTables post_reset;
 
-        while (size > 0) {
-            int ret = write(1, ptr, size);
-            if (ret < 0) {
-                fprintf(stderr, "Failed to write ACPI table, ret=%d\n", ret);
-                exit(1);
-            }
-            ptr += ret;
-            size -= ret;
-        }
-        exit(0);
+        acpi_get_pm_info(MACHINE(pcms), &dump_pm);
+        acpi_pcihp_assign_bsel_for_dump(dump_pm.pcihp_bridge_en);
+
+        acpi_build_tables_init(&post_reset);
+        acpi_build(&post_reset, MACHINE(pcms));
+        acpi_dump_tables_and_exit(&post_reset);
     }
 #endif
     /* Now expose it all to Guest */

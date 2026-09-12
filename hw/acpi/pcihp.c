@@ -262,6 +262,17 @@ static void acpi_pcihp_update(AcpiPciHpState *s)
     }
 }
 
+#ifdef DUMP_ACPI_TABLES
+/*
+ * Test-only: perform the single reset side effect that changes the measured
+ * ACPI tables, without resetting any device.
+ */
+void acpi_pcihp_assign_bsel_for_dump(bool has_bridge_hotplug)
+{
+    acpi_set_pci_info(has_bridge_hotplug);
+}
+#endif
+
 void acpi_pcihp_reset(AcpiPciHpState *s)
 {
     acpi_set_pci_info(s->use_acpi_hotplug_bridge);
